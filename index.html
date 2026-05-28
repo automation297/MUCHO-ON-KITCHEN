@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mucho On — Kitchen Display</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#111; color:#fff; font-family:-apple-system,sans-serif; padding:16px; }
+  .header { display:flex; justify-content:space-between; align-items:center; padding:12px 0 16px; border-bottom:1px solid #333; margin-bottom:16px; }
+  .logo { font-size:20px; font-weight:600; }
+  .status { font-size:12px; padding:4px 10px; border-radius:20px; }
+  .status.connected { background:#0d3d27; color:#4ade80; }
+  .status.disconnected { background:#3d0d0d; color:#f87171; }
+  .printer-bar { background:#1a1a1a; border-radius:10px; padding:12px 16px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; }
+  .printer-btn { font-size:12px; padding:6px 14px; border-radius:8px; cursor:pointer; border:none; background:#1d9e75; color:#fff; }
+  .orders-grid { display:flex; flex-direction:column; gap:12px; }
+  .order-card { background:#1a1a1a; border-radius:12px; padding:16px; border-left:4px solid #1d9e75; }
+  .order-card.new { border-left-color:#fbbf24; }
+  .high-alert { background:#3d1a00; border-left-color:#f97316 !important; }
+  .order-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:6px; }
+  .order-num { font-size:18px; font-weight:600; color:#fbbf24; }
+  .order-time { font-size:12px; color:#888; }
+  .order-type { font-size:11px; padding:3px 8px; border-radius:20px; background:#0d3d27; color:#4ade80; }
+  .high-badge { background:#f97316; color:#fff; font-size:11px; padding:3px 8px; border-radius:20px; font-weight:600; }
+  .order-info { font-size:13px; color:#aaa; margin-bottom:6px; }
+  .order-info span { color:#fff; font-weight:500; }
+  .items { background:#111; border-radius:8px; padding:10px; margin:8px 0; }
+  .item-row { font-size:13px; padding:3px 0; color:#ddd; }
+  .special { color:#fbbf24; font-size:12px; margin-top:4px; }
+  .totals { display:flex; justify-content:space-between; margin-top:8px; font-size:14px; }
+  .total-value { font-weight:600; color:#4ade80; }
+  .change-box { border-radius:6px; padding:6px 10px; margin-top:6px; font-size:13px; text-align:center; font-weight:500; }
+  .cash-change { background:#0d3d27; color:#4ade80; }
+  .swipe-box { background:#0d1a3d; color:#60a5fa; }
+  .print-btn { width:100%; margin-top:10px; padding:10px; border-radius:8px; cursor:pointer; border:none; background:#1d9e75; color:#fff; font-size:14px; font-weight:500; }
+  .empty { text-align:center; padding:60px 20px; color:#444; }
+  .connect-screen { text-align:center; padding:40px 20px; }
+  .connect-btn { padding:14px 32px; border-radius:10px; cursor:pointer; border:none; background:#1d9e75; color:#fff; font-size:16px; font-weight:500; margin-bottom:12px; display:block; width:100%; }
+  .skip-btn { padding:10px; border-radius:10px; cursor:pointer; border:1px solid #333; background:transparent; color:#888; font-size:14px; width:100%; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Mucho On 🌯 Kitchen</div>
+  <div class="status disconnected" id="statusBadge">● Offline</div>
+</div>
+
+<div id="printerBar" class="printer-bar" style="display:none">
+  <span id="printerName" style="font-size:13px;color:#888">No printer</span>
+  <button class="printer-btn" id="printerBtn" onclick="connectPrinter()">Connect Printer</button>
+</div>
+
+<div id="connectScreen" class="connect-screen">
+  <div style="font-size:48px;margin-bottom:12px">🖨️</div>
+  <h2 style="margin-bottom:8px">Kitchen Display</h2>
+  <p style="color:#888;font-size:14px;margin-bottom:24px">Connect your Bluetooth printer to auto-print every order</p>
+  <button class="connect-btn" onclick="initWithPrinter()">Connect Printer & Start</button>
+  <button class="skip-btn" onclick="initWithoutPrinter()">Start without printer (display only)</button>
+</div>
+
+<div id="mainDisplay" style="display:none">
+  <div class="orders-grid" id="ordersGrid">
+    <div class="empty"><p style="font-size:32px">🌯</p><p style="margin-top:8px">Waiting for orders...</p></div>
+  </div>
+</div>
+
+<script>
+const BOT_URL = 'https://mucho-on-bot.onrender.com';
+let printerChar = null;
+let printedOrders = new Set(JSON.parse(localStorage.getItem('mo_printed') || '[]'));
+let audioCtx = null;
+let allOrders = [];
+
+function beep(f=800, d=200) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.frequency.value = f;
+    g.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + d/1000);
+    o.start(); o.stop(audioCtx.currentTime + d/1000);
+  } catch(e){}
+}
+
+function orderBeep() { beep(800,150); setTimeout(()=>beep(1000,150),200); setTimeout(()=>beep(1200,300),400); }
+function alertBeep() { for(let i=0;i<5;i++) setTimeout(()=>beep(1400,200),i*300); }
+
+async function connectPrinter() {
+  try {
+    const dev = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb','e7810a71-73ae-499d-8c15-faa9aef0c3f2']
+    });
+    const server = await dev.gatt.connect();
+    const services = await server.getPrimaryServices();
+    for (const svc of services) {
+      const chars = await svc.getCharacteristics();
+      for (const c of chars) {
+        if (c.properties.write || c.properties.writeWithoutResponse) {
+          printerChar = c;
+          document.getElementById('printerName').textContent = dev.name || 'Printer connected ✓';
+          document.getElementById('printerBtn').textContent = 'Disconnect';
+          document.getElementById('printerBtn').style.background = '#3d1a1a';
+          beep(1000, 400);
+          return true;
+        }
+      }
+    }
+  } catch(e) { alert('Printer error: ' + e.message); }
+  return false;
+}
+
+async function printESC(order) {
+  if (!printerChar) return;
+  const enc = new TextEncoder();
+  const ESC = 0x1B, GS = 0x1D;
+  const send = async (data) => {
+    try { await printerChar.writeValueWithoutResponse(data); await new Promise(r=>setTimeout(r,60)); } catch(e){}
+  };
+  await send(new Uint8Array([ESC,0x40]));
+  await send(new Uint8Array([ESC,0x61,0x01]));
+  await send(new Uint8Array([ESC,0x45,0x01]));
+  await send(enc.encode('MUCHO ON\n'));
+  await send(new Uint8Array([ESC,0x45,0x00]));
+  await send(enc.encode('Paradera 74A\n================================\n'));
+  await send(new Uint8Array([ESC,0x61,0x00]));
+  await send(enc.encode(`Order: #${String(order.id).padStart(3,'0')}  Time: ${order.time}\n`));
+  await send(enc.encode(`Driver: ${order.driver||'Driver 1'}\n`));
+  await send(enc.encode('--------------------------------\n'));
+  await send(enc.encode(`Name:    ${order.name}\n`));
+  await send(enc.encode(`Phone:   ${order.phone}\n`));
+  if (order.localPhone && order.localPhone!=='NONE') await send(enc.encode(`Local:   ${order.localPhone}\n`));
+  const addr = order.meetingPoint && order.meetingPoint!=='none' ? `${order.address} (${order.meetingPoint.toUpperCase()})` : order.address;
+  await send(enc.encode(`Address: ${addr}\n`));
+  await send(enc.encode('--------------------------------\nITEMS:\n\n'));
+  for (const item of order.items) {
+    await send(enc.encode(`${item.desc}\n`));
+    await send(enc.encode(`                ${item.price} FL\n`));
+  }
+  if (order.specialRequests && order.specialRequests!=='NONE') await send(enc.encode(`\n!! ${order.specialRequests}\n`));
+  await send(enc.encode('\n--------------------------------\n'));
+  await send(enc.encode(`Subtotal: ${order.subtotal} FL\n`));
+  if (order.deliveryFee>0) await send(enc.encode(`Delivery: ${order.deliveryFee} FL (${order.zone})\n`));
+  await send(enc.encode('================================\n'));
+  await send(new Uint8Array([ESC,0x45,0x01]));
+  await send(enc.encode(`TOTAL:    ${order.total} FL\n`));
+  await send(new Uint8Array([ESC,0x45,0x00]));
+  if (order.payment==='cash') {
+    await send(enc.encode(`Cash:     ${order.cashGiven} FL\n`));
+    if (order.change>0) { await send(new Uint8Array([ESC,0x45,0x01])); await send(enc.encode(`CHANGE:   ${order.change} FL\n`)); await send(new Uint8Array([ESC,0x45,0x00])); }
+  } else { await send(enc.encode('Payment:  SWIPE (7% BBO)\n')); }
+  await send(enc.encode(`Language: ${order.language}\n================================\n\n\n`));
+  await send(new Uint8Array([GS,0x56,0x41,0x10]));
+}
+
+function markPrinted(id) {
+  printedOrders.add(id);
+  if (printedOrders.size>100) printedOrders = new Set([...printedOrders].slice(-100));
+  localStorage.setItem('mo_printed', JSON.stringify([...printedOrders]));
+}
+
+function renderOrders(orders) {
+  const grid = document.getElementById('ordersGrid');
+  if (!orders.length) { grid.innerHTML='<div class="empty"><p style="font-size:32px">🌯</p><p style="margin-top:8px">Waiting for orders...</p></div>'; return; }
+  grid.innerHTML = [...orders].reverse().slice(0,10).map(o => `
+    <div class="order-card ${o.total>100?'high-alert':''} ${!printedOrders.has(o.id)?'new':''}">
+      <div class="order-header">
+        <span class="order-num">#${String(o.id).padStart(3,'0')}</span>
+        <span class="order-time">${o.time}</span>
+        ${o.total>100?'<span class="high-badge">⚠️ HIGH ORDER — CALL TO CONFIRM</span>':''}
+        <span class="order-type">${o.address==='PICKUP'?'🏠 Pickup':'🛵 Delivery'}</span>
+      </div>
+      <div class="order-info">Name: <span>${o.name}</span></div>
+      <div class="order-info">Phone: <span>${o.phone}</span></div>
+      ${o.address!=='PICKUP'?`<div class="order-info">Address: <span>${o.address}${o.meetingPoint&&o.meetingPoint!=='none'?' — '+o.meetingPoint.toUpperCase():''}</span></div>`:''}
+      <div class="items">${o.items.map(i=>`<div class="item-row">• ${i.desc} — ${i.price} FL</div>`).join('')}${o.specialRequests&&o.specialRequests!=='NONE'?`<div class="special">⚠️ ${o.specialRequests}</div>`:''}</div>
+      <div class="totals"><span style="color:#888">Total</span><span class="total-value">${o.total} FL</span></div>
+      ${o.payment==='cash'&&o.change>0?`<div class="change-box cash-change">CHANGE: ${o.change} FL</div>`:''}
+      ${o.payment==='swipe'?`<div class="change-box swipe-box">SWIPE — Log 7% BBO tax</div>`:''}
+      <button class="print-btn" onclick="reprint(${o.id})">🖨️ Reprint</button>
+    </div>
+  `).join('');
+}
+
+async function reprint(id) {
+  const order = allOrders.find(o=>o.id===id);
+  if (order) await printESC(order);
+}
+
+async function poll() {
+  try {
+    const res = await fetch(`${BOT_URL}/orders/pending`);
+    if (!res.ok) { updateStatus(false); return; }
+    const orders = await res.json();
+    allOrders = orders;
+    const newOnes = orders.filter(o=>!printedOrders.has(o.id));
+    if (newOnes.length) {
+      orderBeep();
+      if (newOnes.some(o=>o.total>100)) alertBeep();
+      renderOrders(orders);
+      for (const o of newOnes) { await printESC(o); markPrinted(o.id); }
+    } else {
+      renderOrders(orders);
+    }
+    updateStatus(true);
+  } catch(e) { updateStatus(false); }
+}
+
+function updateStatus(ok) {
+  const b = document.getElementById('statusBadge');
+  b.textContent = ok ? '● Live' : '● Offline';
+  b.className = `status ${ok?'connected':'disconnected'}`;
+}
+
+async function initWithPrinter() {
+  await connectPrinter();
+  startDisplay();
+}
+
+function initWithoutPrinter() { startDisplay(); }
+
+function startDisplay() {
+  document.getElementById('connectScreen').style.display='none';
+  document.getElementById('mainDisplay').style.display='block';
+  document.getElementById('printerBar').style.display='flex';
+  poll();
+  setInterval(poll, 3000);
+}
+</script>
+</body>
+</html>
