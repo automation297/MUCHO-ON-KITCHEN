@@ -115,11 +115,19 @@ async function connectPrinter() {
 }
 
 async function printESC(order) {
-  if (!printerChar) return;
+  if (!printerChar) return false;
+  if (!printerChar.service.device.gatt.connected) {
+    printerChar = null;
+    document.getElementById('printerName').textContent = 'Printer disconnected';
+    document.getElementById('printerBtn').textContent = 'Connect Printer';
+    document.getElementById('printerBtn').style.background = '#1d9e75';
+    return false;
+  }
   const enc = new TextEncoder();
   const ESC = 0x1B, GS = 0x1D;
+  let printFailed = false;
   const send = async (data) => {
-    try { await printerChar.writeValueWithoutResponse(data); await new Promise(r=>setTimeout(r,60)); } catch(e){}
+    try { await printerChar.writeValueWithoutResponse(data); await new Promise(r=>setTimeout(r,60)); } catch(e){ printFailed = true; }
   };
   await send(new Uint8Array([ESC,0x40]));
   await send(new Uint8Array([ESC,0x61,0x01]));
@@ -155,6 +163,7 @@ async function printESC(order) {
   } else { await send(enc.encode('Payment:  SWIPE (7% BBO)\n')); }
   await send(enc.encode(`Language: ${order.language}\n================================\n\n\n`));
   await send(new Uint8Array([GS,0x56,0x41,0x10]));
+  return !printFailed;
 }
 
 function markPrinted(id) {
@@ -202,7 +211,7 @@ async function poll() {
       orderBeep();
       if (newOnes.some(o=>o.total>100)) alertBeep();
       renderOrders(orders);
-      for (const o of newOnes) { await printESC(o); markPrinted(o.id); }
+      for (const o of newOnes) { const ok = await printESC(o); if (ok) markPrinted(o.id); }
     } else {
       renderOrders(orders);
     }
